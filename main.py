@@ -1,49 +1,78 @@
-
 import logging
-import re
-import requests
-from telegram import Update
-from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, filters
+from instagrapi import Client
 
-# توکن ربات تلگرام شما
-BOT_TOKEN = "7956280947:AAFGEAIx35DLrVSxkaqnKu1KhOsV9WUkYw8"
+# ساختار برای ذخیره اطلاعات کاربران
+users = {}
 
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
-)
+# شروع
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = [
+        [InlineKeyboardButton("📥 ورود به اینستاگرام", callback_data="login")],
+        [InlineKeyboardButton("🎞️ ارسال لینک ریلز", callback_data="send_link")],
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text("به ربات اینستا‌دانلودر خوش اومدی! یکی از گزینه‌ها رو انتخاب کن:", reply_markup=reply_markup)
 
-# تابع استخراج لینک ویدیو از اینستاگرام
-def get_instagram_video_url(insta_url):
-    try:
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
-        }
-        response = requests.get(insta_url, headers=headers)
-        if 'video_url' in response.text:
-            match = re.search(r'"video_url":"([^"]+)"', response.text)
-            if match:
-                video_url = match.group(1).replace("\\u0026", "&").replace("\\", "")
-                return video_url
-        return None
-    except Exception as e:
-        return None
+# مدیریت دکمه‌ها
+async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
 
-# تابع پاسخ به پیام کاربر
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
-    if "instagram.com" in text:
-        await update.message.reply_text("⏳ در حال استخراج لینک ویدیو...")
-        video_url = get_instagram_video_url(text)
-        if video_url:
-            await update.message.reply_text(f"✅ لینک دانلود مستقیم:\n{video_url}")
+    if query.data == "login":
+        await query.message.reply_text("لطفاً یوزرنیم و پسورد اینستای خود را به صورت زیر ارسال کن:\n\n`username|password`", parse_mode="Markdown")
+        users[query.from_user.id] = {"step": "login"}
+
+    elif query.data == "send_link":
+        if query.from_user.id in users and "client" in users[query.from_user.id]:
+            await query.message.reply_text("لطفاً لینک ریلز اینستاگرام را ارسال کن:")
+            users[query.from_user.id]["step"] = "get_link"
         else:
-            await update.message.reply_text("❌ نتونستم لینک ویدیو رو پیدا کنم.")
-    else:
-        await update.message.reply_text("لطفا لینک پست اینستاگرام رو بفرست 😊")
+            await query.message.reply_text("❌ ابتدا باید وارد حساب اینستاگرام شوید.")
 
-# راه‌اندازی ربات
-if __name__ == "__main__":
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
+# مدیریت پیام‌ها
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.from_user.id
+    text = update.message.text.strip()
+
+    # ورود
+    if user_id in users and users[user_id].get("step") == "login":
+        try:
+            username, password = text.split("|")
+            cl = Client()
+            cl.login(username, password)
+            users[user_id]["client"] = cl
+            users[user_id]["step"] = None
+            await update.message.reply_text("✅ ورود موفقیت‌آمیز بود! حالا لینک ریلز را ارسال کنید.")
+        except Exception as e:
+            await update.message.reply_text(f"❌ خطا در ورود: {e}")
+
+    # دریافت لینک ریلز
+    elif user_id in users and users[user_id].get("step") == "get_link":
+        try:
+            cl = users[user_id]["client"]
+            media = cl.media_info_from_url(text)
+            url = cl.media_pk_to_url(media.pk)
+            await update.message.reply_text(f"✅ لینک دانلود:\n{url}")
+        except Exception as e:
+            await update.message.reply_text(f"❌ خطا در دریافت لینک: {e}")
+        users[user_id]["step"] = None
+
+    else:
+        await update.message.reply_text("دستور نامعتبر. از دکمه‌ها استفاده کن.")
+
+# راه‌اندازی بات
+async def main():
+    app = ApplicationBuilder().token("7956280947:AAFGEAIx35DLrVSxkaqnKu1KhOsV9WUkYw8").build()
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CallbackQueryHandler(button))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    app.run_polling()
+
+    print("🤖 ربات با موفقیت اجرا شد...")
+    await app.run_polling()
+
+if __name__ == "__main__":
+    import asyncio
+    asyncio.run(main())
